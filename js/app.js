@@ -17,6 +17,7 @@ Q.navigate = function(path) {
 };
 
 Q.renderPage = function(path) {
+  if (Q._pageCleanup) { Q._pageCleanup(); Q._pageCleanup = null; }
   const mount = document.getElementById('page-mount');
   mount.innerHTML = '';
   window.scrollTo(0, 0);
@@ -311,28 +312,23 @@ Q.pages.home = function() {
 
   const mount = document.getElementById('page-mount');
   mount.innerHTML = `
-  <section class="hero">
-    <div class="container">
-      <div class="hero-slider" id="hero-slider">
-        ${slides.map((s, i) => `
-        <div class="hero-slide ${i === 0 ? 'active' : ''}" data-slide="${i}">
-          <div class="hero-copy">
-            <span class="eyebrow">${Q.escape(s.eyebrow)}</span>
-            <h1>${Q.escape(s.title)}</h1>
-            <p>${Q.escape(s.desc)}</p>
-            <div class="hero-buttons">
-              <a class="btn btn-primary btn-lg" href="${s.primaryHref}">${Q.escape(s.primaryCta)} ←</a>
-              <a class="btn btn-outline" href="${s.secondaryHref}">${Q.escape(s.secondaryCta)}</a>
-            </div>
-          </div>
-          <div class="hero-image"><img src="${s.image}" alt="${Q.escape(s.alt)}"></div>
-        </div>`).join('')}
-        <div class="hero-controls">
-          <button aria-label="اسلاید قبلی" onclick="Q.heroSlide(-1)">›</button>
-          <button aria-label="اسلاید بعدی" onclick="Q.heroSlide(1)">‹</button>
-        </div>
-        <div class="hero-dots">${slides.map((_, i) => `<div class="hero-dot ${i === 0 ? 'active' : ''}" onclick="Q.heroGoTo(${i})"></div>`).join('')}</div>
+  <section class="cinematic-hero" id="cinematic-hero">
+    <div class="cinematic-hero-sticky" id="cinematic-hero-sticky">
+      <div class="cinematic-video-wrap">
+        <video class="cinematic-video" id="cinematic-video" preload="auto" muted playsinline webkit-playsinline src="assets/hero-video.mp4"></video>
+        <div class="cinematic-loading" id="cinematic-loading">در حال بارگذاری تجربه سینمایی…</div>
       </div>
+      <div class="cinematic-overlay" id="cinematic-overlay"></div>
+      <div class="cinematic-content" id="cinematic-content">
+        <span class="eyebrow">${Q.escape(slides[0].eyebrow)}</span>
+        <h1>${Q.escape(slides[0].title)}</h1>
+        <p>${Q.escape(slides[0].desc)}</p>
+        <div class="hero-buttons">
+          <a class="btn btn-primary btn-lg" href="${slides[0].primaryHref}">${Q.escape(slides[0].primaryCta)} ←</a>
+          <a class="btn btn-outline" href="${slides[0].secondaryHref}">${Q.escape(slides[0].secondaryCta)}</a>
+        </div>
+      </div>
+      <div class="cinematic-scroll-hint" id="cinematic-scroll-hint">برای تجربه سینمایی اسکرول کنید</div>
     </div>
   </section>
 
@@ -474,7 +470,7 @@ Q.pages.home = function() {
     </div>
   </section>`;
 
-  Q.initHeroSlider();
+  Q.initCinematicHero();
 };
 
 /* ---- Hero slider logic ---- */
@@ -497,6 +493,123 @@ Q.heroSlide = function(dir) { Q.heroGoTo(Q._heroIndex + dir); };
 Q.startHeroAutoplay = function() {
   clearInterval(Q._heroTimer);
   Q._heroTimer = setInterval(() => Q.heroGoTo(Q._heroIndex + 1), 6000);
+};
+
+/* ---- Cinematic scroll-driven hero ---- */
+Q.initCinematicHero = function() {
+  var heroSection = document.getElementById('cinematic-hero');
+  var video = document.getElementById('cinematic-video');
+  var content = document.getElementById('cinematic-content');
+  var overlay = document.getElementById('cinematic-overlay');
+  var scrollHint = document.getElementById('cinematic-scroll-hint');
+  var loading = document.getElementById('cinematic-loading');
+
+  if (!video || !heroSection) return;
+
+  var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* --- Reduced motion: static hero frame --- */
+  if (reducedMotion) {
+    heroSection.style.height = 'auto';
+    var stickyEl = document.getElementById('cinematic-hero-sticky');
+    if (stickyEl) stickyEl.style.position = 'relative';
+    if (content) { content.style.opacity = '1'; content.style.transform = 'none'; }
+    if (scrollHint) scrollHint.style.display = 'none';
+    video.addEventListener('loadeddata', function ld() {
+      video.removeEventListener('loadeddata', ld);
+      try { video.currentTime = 0; } catch(e) {}
+      if (loading) loading.style.display = 'none';
+    });
+    return;
+  }
+
+  /* --- Scroll-driven cinematic experience --- */
+  var duration = 0;
+  var ready = false;
+  var targetTime = 0;
+  var currentTime = 0;
+  var rafId = null;
+  var lastSetTime = -1;
+
+  function getProgress() {
+    var rect = heroSection.getBoundingClientRect();
+    var scrollable = heroSection.offsetHeight - window.innerHeight;
+    if (scrollable <= 0) return 0;
+    return Math.max(0, Math.min(1, -rect.top / scrollable));
+  }
+
+  function onScroll() {
+    if (!ready) return;
+    targetTime = getProgress() * duration;
+  }
+
+  function tick() {
+    if (ready) {
+      var diff = targetTime - currentTime;
+      if (Math.abs(diff) > 0.005) {
+        currentTime += diff * 0.18;
+      } else {
+        currentTime = targetTime;
+      }
+      currentTime = Math.max(0, Math.min(duration, currentTime));
+      if (Math.abs(currentTime - lastSetTime) > 0.02) {
+        try { video.currentTime = currentTime; } catch(e) {}
+        lastSetTime = currentTime;
+      }
+    }
+
+    var p = ready ? getProgress() : 0;
+
+    /* Content fades and lifts as user scrolls into the cinematic */
+    if (content) {
+      content.style.opacity = Math.max(0, 1 - p * 2.5);
+      content.style.transform = 'translateY(' + (p * -50) + 'px)';
+    }
+    /* Scroll hint fades quickly */
+    if (scrollHint) {
+      scrollHint.style.opacity = Math.max(0, 1 - p * 4);
+    }
+    /* Subtle depth: gentle zoom toward the artworks */
+    video.style.transform = 'scale(' + (1 + p * 0.06) + ')';
+    /* Overlay eases to reveal the artwork */
+    if (overlay) {
+      overlay.style.opacity = 1 - p * 0.4;
+    }
+
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function start() {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function onReady() {
+    duration = video.duration;
+    if (!duration || isNaN(duration) || !isFinite(duration)) return;
+    ready = true;
+    try { video.currentTime = 0; } catch(e) {}
+    currentTime = 0;
+    targetTime = 0;
+    lastSetTime = 0;
+    if (loading) loading.style.display = 'none';
+    start();
+  }
+
+  if (video.readyState >= 2) {
+    onReady();
+  } else {
+    video.addEventListener('loadeddata', onReady);
+  }
+
+  window.addEventListener('scroll', onScroll, { passive: true });
+
+  Q._pageCleanup = function() {
+    if (rafId) cancelAnimationFrame(rafId);
+    window.removeEventListener('scroll', onScroll);
+    video.removeEventListener('loadeddata', onReady);
+    try { video.pause(); } catch(e) {}
+  };
 };
 
 /* ---- PRODUCTS ---- */
