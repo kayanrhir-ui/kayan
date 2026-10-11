@@ -525,11 +525,14 @@ Q.initCinematicHero = function() {
 
   /* --- Scroll-driven cinematic experience --- */
   var duration = 0;
+  var maxTime = 0;
   var ready = false;
   var targetTime = 0;
-  var currentTime = 0;
   var rafId = null;
   var lastSetTime = -1;
+  var seeking = false;
+  var seekTimer = null;
+  var lastActual = -1;
 
   function getProgress() {
     var rect = heroSection.getBoundingClientRect();
@@ -538,27 +541,26 @@ Q.initCinematicHero = function() {
     return Math.max(0, Math.min(1, -rect.top / scrollable));
   }
 
-  function onScroll() {
-    if (!ready) return;
-    targetTime = getProgress() * duration;
+  /* Centralized seek: prevents canceling in-progress seeks which
+     was causing the video to never reach the final frame */
+  function doSeek(t) {
+    seeking = true;
+    try { video.currentTime = t; } catch(e) {}
+    lastSetTime = t;
+    if (seekTimer) clearTimeout(seekTimer);
+    seekTimer = setTimeout(function() { seeking = false; }, 150);
   }
 
   function tick() {
+    var p = ready ? getProgress() : 0;
+
     if (ready) {
-      var diff = targetTime - currentTime;
-      if (Math.abs(diff) > 0.005) {
-        currentTime += diff * 0.18;
-      } else {
-        currentTime = targetTime;
-      }
-      currentTime = Math.max(0, Math.min(duration, currentTime));
-      if (Math.abs(currentTime - lastSetTime) > 0.02) {
-        try { video.currentTime = currentTime; } catch(e) {}
-        lastSetTime = currentTime;
+      /* Directly map scroll progress to video time — no interpolation lag */
+      targetTime = p * maxTime;
+      if (!seeking && Math.abs(targetTime - lastSetTime) > 0.05) {
+        doSeek(targetTime);
       }
     }
-
-    var p = ready ? getProgress() : 0;
 
     /* Content fades and lifts as user scrolls into the cinematic */
     if (content) {
@@ -587,13 +589,29 @@ Q.initCinematicHero = function() {
   function onReady() {
     duration = video.duration;
     if (!duration || isNaN(duration) || !isFinite(duration)) return;
+    maxTime = Math.max(0, duration - 0.05);
     ready = true;
+    seeking = false;
+    lastActual = -1;
     try { video.currentTime = 0; } catch(e) {}
-    currentTime = 0;
-    targetTime = 0;
     lastSetTime = 0;
+    targetTime = 0;
     if (loading) loading.style.display = 'none';
     start();
+  }
+
+  /* Reset seeking flag when browser completes a seek */
+  function onSeeked() {
+    seeking = false;
+    var actual = video.currentTime;
+    if (Math.abs(actual - lastActual) < 0.01) {
+      /* Browser can't get closer — accept current position */
+      lastSetTime = targetTime;
+    } else {
+      lastSetTime = actual;
+    }
+    lastActual = actual;
+    if (seekTimer) { clearTimeout(seekTimer); seekTimer = null; }
   }
 
   if (video.readyState >= 2) {
@@ -601,13 +619,13 @@ Q.initCinematicHero = function() {
   } else {
     video.addEventListener('loadeddata', onReady);
   }
-
-  window.addEventListener('scroll', onScroll, { passive: true });
+  video.addEventListener('seeked', onSeeked);
 
   Q._pageCleanup = function() {
     if (rafId) cancelAnimationFrame(rafId);
-    window.removeEventListener('scroll', onScroll);
+    if (seekTimer) clearTimeout(seekTimer);
     video.removeEventListener('loadeddata', onReady);
+    video.removeEventListener('seeked', onSeeked);
     try { video.pause(); } catch(e) {}
   };
 };
